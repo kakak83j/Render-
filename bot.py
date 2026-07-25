@@ -22,7 +22,7 @@ UPTIMEROBOT_API_KEY = os.getenv("UPTIMEROBOT_API_KEY")
 CRONJOB_API_KEY = os.getenv("CRONJOB_API_KEY")
 CRONJOB_API_USER = os.getenv("CRONJOB_API_USER")
 
-# ---------- Flask for health check ----------
+# ---------- Flask ----------
 app_flask = Flask(__name__)
 @app_flask.route('/health')
 def health():
@@ -89,9 +89,9 @@ async def add_to_uptimerobot(url):
     data = {
         "api_key": UPTIMEROBOT_API_KEY,
         "format": "json",
+        "type": "1",  # ✅ 1 = HTTP(s) – Free plan में मान्य
         "url": url,
         "friendly_name": url.replace("https://", "").replace("http://", "").split("/")[0]
-        # ✅ Free plan: "type" aur "interval" hata diye - default use hoga
     }
     try:
         response = requests.post(api_url, headers=headers, data=data)
@@ -104,7 +104,7 @@ async def add_to_uptimerobot(url):
 
 # ---------- Cron-job Helper (FIXED) ----------
 async def add_to_cronjob(url):
-    api_url = "https://cron-job.org/api/jobs"
+    api_url = "https://cron-job.org/api/v1/jobs"  # ✅ नया endpoint
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {CRONJOB_API_KEY}"
@@ -114,7 +114,7 @@ async def add_to_cronjob(url):
         "url": url,
         "schedule": {
             "type": "interval",
-            "interval": 5,  # ✅ 5 minutes (integer, not cron string)
+            "interval": 5,  # ✅ 5 minutes
             "timezone": "UTC"
         },
         "enabled": True,
@@ -124,15 +124,12 @@ async def add_to_cronjob(url):
     }
     try:
         response = requests.post(api_url, headers=headers, json=payload)
-        # ✅ Debug: Check HTTP status
         if response.status_code != 200:
             return f"❌ HTTP {response.status_code}: {response.text[:100]}"
         result = response.json()
         if result.get("success"):
             return "✅ Added"
         return f"❌ {result.get('message', 'Unknown error')}"
-    except requests.exceptions.JSONDecodeError:
-        return f"⚠️ Invalid API response (check API Key & User)"
     except Exception as e:
         return f"⚠️ Error: {str(e)[:50]}"
 
@@ -393,8 +390,11 @@ def download_github_repo_as_zip(repo_url, download_path):
     return download_path, f"Downloaded {repo}"
 
 # ---------- Bot Run ----------
-def run_bot():
+async def run_bot():
     app = Application.builder().token(TOKEN).build()
+    
+    # ✅ Webhook हटाओ और pending updates ड्रॉप करो
+    await app.bot.delete_webhook(drop_pending_updates=True)
     
     # Commands
     app.add_handler(CommandHandler("start", start))
@@ -418,12 +418,14 @@ def run_bot():
     )
     app.add_handler(conv_handler)
     
-    app.bot.delete_webhook(drop_pending_updates=True)
     print("🤖 Bot चल रहा है...")
-    app.run_polling(drop_pending_updates=True)
+    await app.run_polling(drop_pending_updates=True)
 
 # ---------- Main ----------
 if __name__ == "__main__":
+    # Flask in background thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    run_bot()
+    # Run bot with asyncio
+    import asyncio
+    asyncio.run(run_bot())
