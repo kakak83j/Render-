@@ -1,6 +1,6 @@
 import os
 import requests
-import asyncio
+import threading
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from flask import Flask
@@ -25,7 +25,7 @@ def run_flask():
     app_flask.run(host='0.0.0.0', port=PORT)
 
 # ---------- UptimeRobot Helper (5 minutes) ----------
-async def add_to_uptimerobot(url):
+def add_to_uptimerobot(url):
     api_url = "https://api.uptimerobot.com/v2/newMonitor"
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     data = {
@@ -34,7 +34,7 @@ async def add_to_uptimerobot(url):
         "type": "1",
         "url": url,
         "friendly_name": url.replace("https://", "").replace("http://", "").split("/")[0],
-        "interval": "300"  # ✅ 5 minutes (300 seconds)
+        "interval": "300"
     }
     try:
         response = requests.post(api_url, headers=headers, data=data)
@@ -46,7 +46,7 @@ async def add_to_uptimerobot(url):
         return f"⚠️ Error: {str(e)[:50]}"
 
 # ---------- Cron-job Helper (1 minute) ----------
-async def add_to_cronjob(url):
+def add_to_cronjob(url):
     api_url = "https://cron-job.org/api/v1/jobs"
     headers = {
         "Content-Type": "application/json",
@@ -57,7 +57,7 @@ async def add_to_cronjob(url):
         "url": url,
         "schedule": {
             "type": "interval",
-            "interval": 1,  # ✅ 1 minute
+            "interval": 1,
             "timezone": "UTC"
         },
         "enabled": True,
@@ -91,12 +91,12 @@ async def monitor_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = []
     
     if UPTIMEROBOT_API_KEY:
-        results.append(f"🟢 UptimeRobot: {await add_to_uptimerobot(url)}")
+        results.append(f"🟢 UptimeRobot: {add_to_uptimerobot(url)}")
     else:
         results.append("🟢 UptimeRobot: API Key missing")
     
     if CRONJOB_API_KEY and CRONJOB_API_USER:
-        results.append(f"🔵 Cron-job: {await add_to_cronjob(url)}")
+        results.append(f"🔵 Cron-job: {add_to_cronjob(url)}")
     else:
         results.append("🔵 Cron-job: API Key or User missing")
     
@@ -112,27 +112,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "ℹ️ `/start` – यह मैसेज"
     )
 
-# ---------- Bot Run ----------
-async def run_bot():
+# ---------- Bot Run (FIXED) ----------
+def run_bot():
     app = Application.builder().token(TOKEN).build()
     
-    # Webhook हटाओ
-    await app.bot.delete_webhook(drop_pending_updates=True)
+    # Webhook हटाओ (synchronous)
+    app.bot.delete_webhook(drop_pending_updates=True)
     
     # Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("monitor", monitor_url))
     
     print("🤖 Bot चल रहा है...")
-    await app.run_polling(drop_pending_updates=True)
+    # ✅ सीधे run_polling चलाओ (blocking)
+    app.run_polling(drop_pending_updates=True)
 
 # ---------- Main ----------
 if __name__ == "__main__":
-    import threading
-    
     # Flask in background thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    
-    # Run bot
-    asyncio.run(run_bot())
+    # Bot in main thread
+    run_bot()
