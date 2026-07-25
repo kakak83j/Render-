@@ -82,18 +82,16 @@ def download_repo_as_zip(repo_name, download_path):
     except Exception as e:
         return None, str(e)
 
-# ---------- UptimeRobot Helper ----------
+# ---------- UptimeRobot Helper (FIXED) ----------
 async def add_to_uptimerobot(url):
     api_url = "https://api.uptimerobot.com/v2/newMonitor"
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     data = {
         "api_key": UPTIMEROBOT_API_KEY,
         "format": "json",
-        "type": "1",
         "url": url,
-        "friendly_name": url.replace("https://", "").replace("http://", "").split("/")[0],
-        "interval": "300",
-        "status": "1"
+        "friendly_name": url.replace("https://", "").replace("http://", "").split("/")[0]
+        # ✅ Free plan: "type" aur "interval" hata diye - default use hoga
     }
     try:
         response = requests.post(api_url, headers=headers, data=data)
@@ -104,7 +102,7 @@ async def add_to_uptimerobot(url):
     except Exception as e:
         return f"⚠️ Error: {str(e)[:50]}"
 
-# ---------- Cron-job Helper ----------
+# ---------- Cron-job Helper (FIXED) ----------
 async def add_to_cronjob(url):
     api_url = "https://cron-job.org/api/jobs"
     headers = {
@@ -116,7 +114,7 @@ async def add_to_cronjob(url):
         "url": url,
         "schedule": {
             "type": "interval",
-            "interval": "*/5 * * * *",
+            "interval": 5,  # ✅ 5 minutes (integer, not cron string)
             "timezone": "UTC"
         },
         "enabled": True,
@@ -126,10 +124,15 @@ async def add_to_cronjob(url):
     }
     try:
         response = requests.post(api_url, headers=headers, json=payload)
+        # ✅ Debug: Check HTTP status
+        if response.status_code != 200:
+            return f"❌ HTTP {response.status_code}: {response.text[:100]}"
         result = response.json()
         if result.get("success"):
             return "✅ Added"
         return f"❌ {result.get('message', 'Unknown error')}"
+    except requests.exceptions.JSONDecodeError:
+        return f"⚠️ Invalid API response (check API Key & User)"
     except Exception as e:
         return f"⚠️ Error: {str(e)[:50]}"
 
@@ -146,14 +149,14 @@ async def monitor_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = []
     
     if UPTIMEROBOT_API_KEY:
-        results.append(f"UptimeRobot: {await add_to_uptimerobot(url)}")
+        results.append(f"🟢 UptimeRobot: {await add_to_uptimerobot(url)}")
     else:
-        results.append("UptimeRobot: API Key missing")
+        results.append("🟢 UptimeRobot: API Key missing")
     
     if CRONJOB_API_KEY and CRONJOB_API_USER:
-        results.append(f"Cron-job: {await add_to_cronjob(url)}")
+        results.append(f"🔵 Cron-job: {await add_to_cronjob(url)}")
     else:
-        results.append("Cron-job: API Key or User missing")
+        results.append("🔵 Cron-job: API Key or User missing")
     
     await update.message.reply_text("📊 **Monitor Status:**\n" + "\n".join(results))
 
