@@ -50,25 +50,23 @@ def run_flask():
 # ──── Helper Functions ────
 
 def normalize_url(url: str) -> str:
-    """Add https:// if no protocol specified."""
     url = url.strip()
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     return url
 
 def extract_domain(url: str) -> str:
-    """Extract clean domain name for friendly name."""
     parsed = urlparse(url)
     domain = parsed.netloc or parsed.path
     domain = domain.replace("www.", "")
-    return domain[:30]  # Keep it short
+    return domain[:30]
 
-# ──── UptimeRobot Integration ────
+# ──── UptimeRobot Integration (FIXED) ────
 
 def add_uptimerobot(url: str) -> dict:
     """
-    Add monitor to UptimeRobot via API v2.
-    Free plan: 5-minute interval, 50 monitors max.
+    UptimeRobot API v2 - newMonitor
+    Free plan: 5-min interval fixed, NO interval parameter allowed.
     """
     result = {"success": False, "message": "", "data": None}
     
@@ -78,18 +76,16 @@ def add_uptimerobot(url: str) -> dict:
     
     friendly_name = extract_domain(url)
     
-    headers = {
-        "Content-Type": "application/json",
-        "Cache-Control": "no-cache"
-    }
+    headers = {"Content-Type": "application/json", "Cache-Control": "no-cache"}
     
+    # ⚠️ Free plan mein interval mat bhejo — error aata hai
     payload = {
         "api_key": UPTIMEROBOT_API_KEY,
         "format": "json",
-        "type": 1,  # HTTP(s)
+        "type": 1,           # HTTP(s) monitor
         "url": url,
-        "friendly_name": friendly_name,
-        "interval": 300,  # 5 minutes (free plan)
+        "friendly_name": friendly_name
+        # ❌ interval mat bhejo — free plan automatically 5 min set karta hai
     }
     
     try:
@@ -104,28 +100,27 @@ def add_uptimerobot(url: str) -> dict:
         if data.get("stat") == "ok":
             monitor = data.get("monitor", [{}])[0]
             result["success"] = True
-            result["message"] = f"✅ Added (ID: {monitor.get('id', 'N/A')})"
+            result["message"] = f"✅ Added (ID: {monitor.get('id', 'N/A')}, 5 min interval)"
             result["data"] = monitor
         else:
             error_msg = data.get("error", {}).get("message", "Unknown error")
             result["message"] = f"❌ UptimeRobot: {error_msg}"
             
-    except requests.exceptions.Timeout:
-        result["message"] = "❌ UptimeRobot: Timeout"
-    except requests.exceptions.ConnectionError:
-        result["message"] = "❌ UptimeRobot: Connection failed"
     except Exception as e:
         result["message"] = f"❌ UptimeRobot: {str(e)}"
     
     return result
 
 
-# ──── Cron-job.org Integration ────
+# ──── Cron-job.org Integration (FIXED) ────
 
 def add_cronjob(url: str) -> dict:
     """
-    Add cron job to Cron-job.org via API v1.
-    Free plan: 1-minute interval.
+    Cron-job.org API v1 — correct implementation.
+    - Method: PUT (NOT POST!)
+    - Endpoint: https://api.cron-job.org/jobs
+    - Payload under "job" key
+    - Schedule uses arrays, NOT cronExpression
     """
     result = {"success": False, "message": "", "data": None}
     
@@ -140,54 +135,61 @@ def add_cronjob(url: str) -> dict:
         "Authorization": f"Bearer {CRONJOB_API_KEY}",
     }
     
-    # Cron-job.org v1 API: POST /jobs
-    # Body: { title, url, schedule (cron expression), email, enabled }
+    # ✅ Correct payload format — "job" key ke andar
     payload = {
-        "title": f"Monitor - {friendly_name}",
-        "url": url,
-        "schedule": {
-            "cronExpression": "* * * * *",  # Every 1 minute
-            "timezone": "UTC"
-        },
-        "notification": {
-            "email": True,
-            "emailAddress": CRONJOB_API_USER,
-            "onFailure": True,
-            "onSuccess": False,
-            "onDisabled": True
-        },
-        "enabled": True,
-        "saveResponses": True,
-        "requestMethod": 1  # GET
+        "job": {
+            "title": f"Monitor - {friendly_name}",
+            "url": url,
+            "enabled": True,
+            "saveResponses": True,
+            "requestMethod": 1,   # 1 = GET
+            "notification": {
+                "email": True,
+                "emailAddress": CRONJOB_API_USER,
+                "onFailure": True,
+                "onSuccess": False,
+                "onDisabled": True
+            },
+            "schedule": {
+                "timezone": "Asia/Kolkata",   # Indian time
+                "expiresAt": 0,
+                "hours": [-1],      # Every hour
+                "minutes": [0, 30], # At min 0 and 30 → every 30 min
+                "mdays": [-1],      # Every day of month
+                "months": [-1],     # Every month
+                "wdays": [-1]       # Every day of week
+            }
+        }
     }
     
     try:
-        resp = requests.post(
+        # ✅ PUT method (POST nahi!)
+        resp = requests.put(
             "https://api.cron-job.org/jobs",
             headers=headers,
             json=payload,
             timeout=30
         )
         
-        if resp.status_code in [200, 201]:
+        if resp.status_code == 200:
             data = resp.json()
             job_id = data.get("jobId", "N/A")
             result["success"] = True
-            result["message"] = f"✅ Added (ID: {job_id})"
+            result["message"] = f"✅ Added (ID: {job_id}, 30 min interval)"
             result["data"] = {"jobId": job_id}
-        elif resp.status_code == 409:
-            result["message"] = "❌ Cron-job: Duplicate entry (already added)"
+        elif resp.status_code == 400:
+            result["message"] = f"❌ Cron-job: Invalid data — check format"
+        elif resp.status_code == 403:
+            result["message"] = f"❌ Cron-job: API key invalid or IP not allowed"
+        elif resp.status_code == 404:
+            result["message"] = f"❌ Cron-job: API endpoint not found"
         else:
             try:
-                err = resp.json().get("error", "Unknown error")
+                err = resp.json()
+                result["message"] = f"❌ Cron-job: {json.dumps(err)}"
             except:
-                err = f"HTTP {resp.status_code}"
-            result["message"] = f"❌ Cron-job: {err}"
+                result["message"] = f"❌ Cron-job: HTTP {resp.status_code}"
             
-    except requests.exceptions.Timeout:
-        result["message"] = "❌ Cron-job: Timeout"
-    except requests.exceptions.ConnectionError:
-        result["message"] = "❌ Cron-job: Connection failed"
     except Exception as e:
         result["message"] = f"❌ Cron-job: {str(e)}"
     
@@ -197,8 +199,6 @@ def add_cronjob(url: str) -> dict:
 # ──── Monitor Command ────
 
 async def monitor_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /monitor <URL>"""
-    
     if not context.args:
         await update.message.reply_text(
             "❌ *Usage:* `/monitor <URL>`\n\n"
@@ -213,7 +213,6 @@ async def monitor_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = normalize_url(raw_url)
     domain = extract_domain(url)
     
-    # Validate URL
     if not re.match(r'^https?://[^\s/$.?#].[^\s]*$', url):
         await update.message.reply_text(
             f"❌ Invalid URL: `{raw_url}`\nकृपया सही URL भेजें।",
@@ -221,44 +220,36 @@ async def monitor_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Send processing message
     processing_msg = await update.message.reply_text(
         f"⏳ `{url}` को monitor करने के लिए जोड़ रहा हूँ...",
         parse_mode="Markdown"
     )
     
-    # Add to both services (parallel)
     await update.message.chat.send_action("typing")
     
     ur_result = add_uptimerobot(url)
     cj_result = add_cronjob(url)
     
-    # ──── Build Response ────
     msg_parts = []
     msg_parts.append(f"📊 *Monitor Status — `{domain}`*")
     msg_parts.append(f"🔗 `{url}`\n")
     
-    # UptimeRobot
     ur_emoji = "🟢" if ur_result["success"] else "🔴"
     msg_parts.append(f"{ur_emoji} *UptimeRobot:* {ur_result['message']}")
     
-    # Cron-job
     cj_emoji = "🟢" if cj_result["success"] else "🔴"
     msg_parts.append(f"{cj_emoji} *Cron-job:* {cj_result['message']}")
     
-    # Summary
     success_count = sum([ur_result["success"], cj_result["success"]])
     msg_parts.append(f"\n{'✅' if success_count == 2 else '⚠️'} *Result:* {success_count}/2 services configured")
     
-    # Tips
     msg_parts.append("\n💡 *Tips:*")
-    msg_parts.append("• UptimeRobot → 5 min interval (free plan)")
-    msg_parts.append("• Cron-job → 1 min interval (free plan)")
+    msg_parts.append("• UptimeRobot → 5 min interval (free plan fixed)")
+    msg_parts.append("• Cron-job → 30 min interval (free plan)")
     msg_parts.append("• Dashboards check karein for detailed stats")
     
     msg = "\n".join(msg_parts)
     
-    # Add dashboard links
     keyboard = [
         [InlineKeyboardButton("📊 UptimeRobot Dashboard", url="https://uptimerobot.com/dashboard")],
         [InlineKeyboardButton("🔄 Cron-job Dashboard", url="https://cron-job.org/en/dashboard/")],
@@ -267,21 +258,17 @@ async def monitor_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await processing_msg.edit_text(msg, parse_mode="Markdown", reply_markup=reply_markup)
     
-    # Log
     logger.info(f"Monitor added: {url} | UR: {ur_result['success']} | CJ: {cj_result['success']}")
 
 
 # ──── Start Command ────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start"""
-    
-    # Check if all env vars are set
     config_status = []
-    config_status.append("✅" if TELEGRAM_BOT_TOKEN else "❌" + " TELEGRAM_BOT_TOKEN")
-    config_status.append("✅" if UPTIMEROBOT_API_KEY else "❌" + " UPTIMEROBOT_API_KEY")
-    config_status.append("✅" if CRONJOB_API_KEY else "❌" + " CRONJOB_API_KEY")
-    config_status.append("✅" if CRONJOB_API_USER else "❌" + " CRONJOB_API_USER")
+    config_status.append("✅ TELEGRAM_BOT_TOKEN" if TELEGRAM_BOT_TOKEN else "❌ TELEGRAM_BOT_TOKEN")
+    config_status.append("✅ UPTIMEROBOT_API_KEY" if UPTIMEROBOT_API_KEY else "❌ UPTIMEROBOT_API_KEY")
+    config_status.append("✅ CRONJOB_API_KEY" if CRONJOB_API_KEY else "❌ CRONJOB_API_KEY")
+    config_status.append("✅ CRONJOB_API_USER" if CRONJOB_API_USER else "❌ CRONJOB_API_USER")
     
     msg = (
         "🤖 *URL Monitor Bot*\n\n"
@@ -299,10 +286,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
-# ──── Unknown Commands ────
-
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle unknown commands."""
     await update.message.reply_text(
         "❌ Unknown command\n\n"
         "*/start* — Help\n"
@@ -311,10 +295,7 @@ async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ──── Main ────
-
 def main():
-    # Validate config
     if not TELEGRAM_BOT_TOKEN:
         logger.error("❌ TELEGRAM_BOT_TOKEN not set!")
         return
@@ -325,12 +306,10 @@ def main():
     if not CRONJOB_API_KEY or not CRONJOB_API_USER:
         logger.warning("⚠️ CRONJOB_API_KEY/USER not set — Cron-job won't work")
     
-    # Start Flask health server in background
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
     logger.info(f"✅ Flask health server running on port {PORT}")
     
-    # Build Telegram bot
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
@@ -339,14 +318,12 @@ def main():
     
     logger.info("🤖 URL Monitor Bot started!")
     
-    # Delete webhook if exists
     try:
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook")
         logger.info("✅ Webhook deleted (polling mode)")
     except:
         pass
     
-    # Start polling
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
