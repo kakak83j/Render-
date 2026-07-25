@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: zip-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_USERNAME
+        sync: false
+      - key: UPTIMEROBOT_API_KEY
+        sync: false
+      - key: CRONJOB_API_KEY
+        sync: false
+      - key: CRONJOB_API_USER
+        sync: false
+      - key: PORT
+        value: 8080
