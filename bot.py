@@ -10,8 +10,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # ──── CONFIG ────
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-UPTIMEROBOT_API_KEY = os.environ.get("UPTIMEROBOT_API_KEY", "")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8649183907:AAHLQZ2F-gW5yqn2cn19nB3HrdhEueNLA5U")
+UPTIMEROBOT_API_KEY = "u3653759-476d6400f73a515c9c5bd7fd"   # 👈 Hardcoded
 CRONJOB_API_KEY = os.environ.get("CRONJOB_API_KEY", "")
 CRONJOB_API_USER = os.environ.get("CRONJOB_API_USER", "")
 PORT = int(os.environ.get("PORT", 8080))
@@ -64,7 +64,7 @@ def extract_domain(url: str) -> str:
 def add_uptimerobot(url: str) -> dict:
     """
     UptimeRobot API v2 - newMonitor
-    Free plan: 5-min interval fixed, NO custom checkInterval
+    Free plan: 5-min interval fixed
     """
     result = {
         "success": False,
@@ -169,7 +169,7 @@ def add_cronjob(url: str) -> dict:
                 "timezone": "Asia/Kolkata",
                 "expiresAt": 0,
                 "hours": [-1],                  # Har ghante
-                "minutes": list(range(0, 60)),  # 👈 HAR 1 MINUTE!
+                "minutes": list(range(0, 60)),  # HAR 1 MINUTE!
                 "mdays": [-1],                  # Har din
                 "months": [-1],                 # Har mahina
                 "wdays": [-1]                   # Har din hafta
@@ -178,7 +178,7 @@ def add_cronjob(url: str) -> dict:
     }
 
     try:
-        # ✅ PUT method
+        # PUT method
         resp = requests.put(
             "https://api.cron-job.org/jobs",
             headers=headers,
