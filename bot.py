@@ -11,7 +11,11 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 # ──── CONFIG ────
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8649183907:AAHLQZ2F-gW5yqn2cn19nB3HrdhEueNLA5U")
-UPTIMEROBOT_API_KEY = "u3653759-476d6400f73a515c9c5bd7fd"   # Main API Key (read-write)
+
+# UptimeRobot API Keys (Main Key is required for creating monitors)
+UPTIMEROBOT_MAIN_API_KEY = "u3653759-82ca8e1254d565d3aaf5b0a0"
+UPTIMEROBOT_READ_API_KEY = "ur3653759-cbc6d8bc5a4d10bdd4f17825" # Future use for /status command
+
 CRONJOB_API_KEY = os.environ.get("CRONJOB_API_KEY", "")
 CRONJOB_API_USER = os.environ.get("CRONJOB_API_USER", "")
 PORT = int(os.environ.get("PORT", 8080))
@@ -24,28 +28,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ──── Flask Health Check ────
-app = Flask(__name__)
+app_flask = Flask(__name__)
 
-@app.route("/health")
+@app_flask.route("/health")
 def health():
     return jsonify({"status": "ok", "bot": "running"}), 200
 
-@app.route("/")
+@app_flask.route("/")
 def home():
     return jsonify({
         "bot": "URL Monitor Bot",
-        "endpoints": {
-            "/health": "Health check",
-            "/": "This info"
-        },
-        "commands": {
-            "/start": "Show help",
-            "/monitor <url>": "Add URL to monitoring"
-        }
+        "endpoints": {"/health": "Health check", "/": "This info"},
+        "commands": {"/start": "Show help", "/monitor <url>": "Add URL to monitoring"}
     }), 200
 
 def run_flask():
-    app.run(host="0.0.0.0", port=PORT, debug=False)
+    app_flask.run(host="0.0.0.0", port=PORT, debug=False)
 
 # ──── Helper Functions ────
 def normalize_url(url: str) -> str:
@@ -60,98 +58,48 @@ def extract_domain(url: str) -> str:
     domain = domain.replace("www.", "")
     return domain[:30]
 
-# ──── UptimeRobot Integration (v3 API with v2 fallback) ────
+# ──── UptimeRobot Integration ────
 def add_uptimerobot(url: str) -> dict:
-    result = {
-        "success": False,
-        "message": "",
-        "data": None
-    }
+    result = {"success": False, "message": "", "data": None}
 
-    if not UPTIMEROBOT_API_KEY:
+    if not UPTIMEROBOT_MAIN_API_KEY:
         result["message"] = "❌ UptimeRobot: API key missing"
         return result
 
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {UPTIMEROBOT_API_KEY}",
-        "x-api-key": UPTIMEROBOT_API_KEY,
-        "Cache-Control": "no-cache"
-    }
-
     friendly_name = extract_domain(url)
 
+    # Use Dictionary instead of string to auto-handle URL encoding correctly
     payload = {
-        "friendly_name": friendly_name,
+        "api_key": UPTIMEROBOT_MAIN_API_KEY,
+        "format": "json",
         "type": 1,
         "url": url,
+        "friendly_name": friendly_name
     }
 
     try:
-        # Try v3 API first
         resp = requests.post(
-            "https://api.uptimerobot.com/v3/monitors",
-            headers=headers,
-            json=payload,
+            "https://api.uptimerobot.com/v2/newMonitor",
+            data=payload,
             timeout=30
         )
 
-        if resp.status_code in [200, 201]:
+        if resp.status_code == 200:
             data = resp.json()
-            if data.get("stat") == "ok" or data.get("success"):
+            if data.get("stat") == "ok":
                 monitor_id = data.get("monitor", {}).get("id", "N/A")
                 result["success"] = True
-                result["message"] = f"✅ Added (ID: {monitor_id}, 5 min interval)"
+                result["message"] = f"✅ UptimeRobot Added (ID: {monitor_id}, 5 min)"
                 result["data"] = {"monitorId": monitor_id}
             else:
-                err_msg = data.get("error", {}).get("message", json.dumps(data))
-                if "already exists" in str(data).lower():
-                    result["success"] = True
-                    result["message"] = "⚠️ UptimeRobot: Already monitored (duplicate)"
-                else:
-                    result["message"] = f"❌ UptimeRobot: {err_msg}"
-            return result
-        elif resp.status_code == 403:
-            logger.info("UptimeRobot v3 returned 403, trying v2...")
-        else:
-            result["message"] = f"❌ UptimeRobot v3: HTTP {resp.status_code}"
-            # Don't return, try v2 fallback
-    except Exception as e:
-        logger.warning(f"UptimeRobot v3 failed: {e}, trying v2...")
-
-    # ── Fallback: v2 API ──
-    try:
-        headers2 = {"Content-Type": "application/x-www-form-urlencoded"}
-        payload2 = {
-            "api_key": UPTIMEROBOT_API_KEY,
-            "format": "json",
-            "type": 1,
-            "url": url,
-            "friendly_name": friendly_name,
-        }
-        resp2 = requests.post(
-            "https://api.uptimerobot.com/v2/newMonitor",
-            headers=headers2,
-            data=payload2,
-            timeout=30
-        )
-
-        if resp2.status_code == 200:
-            data2 = resp2.json()
-            if data2.get("stat") == "ok":
-                monitor_id = data2.get("monitor", {}).get("id", "N/A")
-                result["success"] = True
-                result["message"] = f"✅ Added (ID: {monitor_id}, 5 min interval)"
-                result["data"] = {"monitorId": monitor_id}
-            else:
-                err_msg = data2.get("error", {}).get("message", "Unknown error")
+                err_msg = data.get("error", {}).get("message", "Unknown error")
                 if "already exists" in err_msg.lower():
                     result["success"] = True
-                    result["message"] = "⚠️ UptimeRobot: Already monitored (duplicate)"
+                    result["message"] = "⚠️ UptimeRobot: Already monitored"
                 else:
-                    result["message"] = f"❌ UptimeRobot v2: {err_msg}"
+                    result["message"] = f"❌ UptimeRobot: {err_msg}"
         else:
-            result["message"] = f"❌ UptimeRobot v2: HTTP {resp2.status_code} - Generate a NEW Main API Key from UptimeRobot dashboard (Settings → API Settings → Main API Key)"
+            result["message"] = f"❌ UptimeRobot: HTTP {resp.status_code} — API Error."
 
     except Exception as e:
         result["message"] = f"❌ UptimeRobot: {str(e)}"
@@ -160,11 +108,7 @@ def add_uptimerobot(url: str) -> dict:
 
 # ──── Cron-job.org Integration (1-MINUTE INTERVAL) ────
 def add_cronjob(url: str) -> dict:
-    result = {
-        "success": False,
-        "message": "",
-        "data": None
-    }
+    result = {"success": False, "message": "", "data": None}
 
     if not CRONJOB_API_KEY or not CRONJOB_API_USER:
         result["message"] = "❌ Cron-job: API key or email missing"
@@ -173,7 +117,6 @@ def add_cronjob(url: str) -> dict:
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {CRONJOB_API_KEY}",
-        "Cache-Control": "no-cache"
     }
 
     friendly_name = extract_domain(url)
@@ -205,32 +148,21 @@ def add_cronjob(url: str) -> dict:
     }
 
     try:
-        resp = requests.put(
-            "https://api.cron-job.org/jobs",
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
-
+        resp = requests.put("https://api.cron-job.org/jobs", headers=headers, json=payload, timeout=30)
         if resp.status_code == 200:
             data = resp.json()
             job_id = data.get("jobId", "N/A")
             result["success"] = True
-            result["message"] = f"✅ Added (ID: {job_id}, 1 min interval)"
+            result["message"] = f"✅ Cron-job Added (ID: {job_id}, 1 min interval)"
             result["data"] = {"jobId": job_id}
-        elif resp.status_code == 400:
-            result["message"] = "❌ Cron-job: Invalid data — check format"
         elif resp.status_code == 403:
             result["message"] = "❌ Cron-job: API key invalid or IP not allowed"
-        elif resp.status_code == 404:
-            result["message"] = "❌ Cron-job: API endpoint not found"
         else:
             try:
                 err = resp.json()
                 result["message"] = f"❌ Cron-job: {json.dumps(err)}"
             except:
                 result["message"] = f"❌ Cron-job: HTTP {resp.status_code}"
-
     except Exception as e:
         result["message"] = f"❌ Cron-job: {str(e)}"
 
@@ -239,13 +171,7 @@ def add_cronjob(url: str) -> dict:
 # ──── Monitor Command ────
 async def monitor_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text(
-            "❌ *Usage:* `/monitor <url>`\n\n"
-            "Example:\n"
-            "`/monitor https://myapp.onrender.com`\n"
-            "`/monitor google.com`",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text("❌ *Usage:* `/monitor <url>`\n\nExample:\n`/monitor https://myapp.onrender.com`", parse_mode="Markdown")
         return
 
     raw_url = " ".join(context.args)
@@ -253,108 +179,80 @@ async def monitor_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     domain = extract_domain(url)
 
     if not re.match(r'^https?://[^\s/$.?#].[^\s]*$', url):
-        await update.message.reply_text(
-            f"❌ Invalid URL: `{raw_url}`\nकृपया सही URL भेजें।",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text(f"❌ Invalid URL: `{raw_url}`", parse_mode="Markdown")
         return
 
-    processing_msg = await update.message.reply_text(
-        f"⏳ `{url}` को monitor करने के लिए जोड़ रहा हूँ...",
-        parse_mode="Markdown"
-    )
-
+    processing_msg = await update.message.reply_text(f"⏳ `{url}` को monitor करने के लिए जोड़ रहा हूँ...", parse_mode="Markdown")
     await update.message.chat.send_action("typing")
 
     ur_result = add_uptimerobot(url)
     cj_result = add_cronjob(url)
 
-    msg_parts = []
-    msg_parts.append(f"📊 *Monitor Status — `{domain}`*")
-    msg_parts.append(f"🔗 `{url}`\n")
-
-    ur_emoji = "🟢" if ur_result["success"] else "🔴"
-    msg_parts.append(f"{ur_emoji} *UptimeRobot:* {ur_result['message']}")
-
-    cj_emoji = "🟢" if cj_result["success"] else "🔴"
-    msg_parts.append(f"{cj_emoji} *Cron-job:* {cj_result['message']}")
-
-    success_count = sum([ur_result["success"], cj_result["success"]])
-    msg_parts.append(f"\n{'✅' if success_count == 2 else '⚠️'} *Result:* {success_count}/2 services configured")
-
-    msg_parts.append("\n💡 *Tips:*")
-    msg_parts.append("• UptimeRobot → 5 min interval (free plan fixed)")
-    msg_parts.append("• Cron-job → **1 min interval** 🔥")
-    msg_parts.append("• Dashboards check karein for detailed stats")
-
+    msg_parts = [
+        f"📊 *Monitor Status — `{domain}`*",
+        f"🔗 `{url}`\n",
+        f"{'🟢' if ur_result['success'] else '🔴'} *UptimeRobot:* {ur_result['message']}",
+        f"{'🟢' if cj_result['success'] else '🔴'} *Cron-job:* {cj_result['message']}",
+        f"\n{'✅' if ur_result['success'] and cj_result['success'] else '⚠️'} *Result:* {sum([ur_result['success'], cj_result['success']])}/2 services configured",
+        "\n💡 *Tips:*",
+        "• UptimeRobot → 5 min interval (free plan fixed)",
+        "• Cron-job → **1 min interval** 🔥",
+        "• Dashboards check करे for detailed stats"
+    ]
     msg = "\n".join(msg_parts)
 
-    # ✅ Fixed: Cron-job dashboard URL ab sahi hai
     keyboard = [
-        [InlineKeyboardButton("📊 UptimeRobot Dashboard", url="https://uptimerobot.com/dashboard")],
+        [InlineKeyboardButton("📊 UptimeRobot Dashboard", url="https://dashboard.uptimerobot.com/")],
         [InlineKeyboardButton("🔄 Cron-job Dashboard", url="https://console.cron-job.org/")],
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await processing_msg.edit_text(msg, parse_mode="Markdown", reply_markup=reply_markup)
+    await processing_msg.edit_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     logger.info(f"Monitor added: {url} | UR: {ur_result['success']} | CJ: {cj_result['success']}")
 
 # ──── Start Command ────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    config_status = []
-    config_status.append("✅ TELEGRAM_BOT_TOKEN" if TELEGRAM_BOT_TOKEN else "❌ TELEGRAM_BOT_TOKEN")
-    config_status.append("✅ UPTIMEROBOT_API_KEY" if UPTIMEROBOT_API_KEY else "❌ UPTIMEROBOT_API_KEY")
-    config_status.append("✅ CRONJOB_API_KEY" if CRONJOB_API_KEY else "❌ CRONJOB_API_KEY")
-    config_status.append("✅ CRONJOB_API_USER" if CRONJOB_API_USER else "❌ CRONJOB_API_USER")
-
+    config_status = [
+        "✅ TELEGRAM_BOT_TOKEN" if TELEGRAM_BOT_TOKEN else "❌ TELEGRAM_BOT_TOKEN",
+        "✅ UPTIMEROBOT_MAIN_API_KEY" if UPTIMEROBOT_MAIN_API_KEY else "❌ UPTIMEROBOT_MAIN_API_KEY",
+        "✅ CRONJOB_API_KEY" if CRONJOB_API_KEY else "❌ CRONJOB_API_KEY",
+        "✅ CRONJOB_API_USER" if CRONJOB_API_USER else "❌ CRONJOB_API_USER",
+    ]
     msg = (
         "🤖 *URL Monitor Bot*\n\n"
-        "एक ही command से किसी भी URL को दो monitoring services "
-        "(UptimeRobot + Cron-job.org) पर add करें।\n\n"
+        "एक ही command से किसी भी URL को दो monitoring services पर add करें।\n\n"
         "*/monitor <url>* — URL को monitor करें\n\n"
         "*Examples:*\n"
         "`/monitor https://myapp.onrender.com`\n"
         "`/monitor google.com`\n\n"
-        "*Config Status:*\n"
-        + "\n".join(config_status) +
-        "\n\n*Cron-job Interval:* 🔥 **1 Minute**\n\n"
+        "*Config Status:*\n" + "\n".join(config_status) +
+        "\n\n*Cron-job:* 🔥 **1 Minute interval**\n"
+        "*UptimeRobot:* ⏱️ **5 Minute interval** (free plan)\n\n"
         "_Powered by HackerAI_"
     )
-
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "❌ Unknown command\n\n"
-        "*/start* — Help\n"
-        "*/monitor <url>* — URL monitor करें",
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text("❌ Unknown command\n\n*/start* — Help\n*/monitor <url>* — URL monitor करें", parse_mode="Markdown")
 
 def main():
     if not TELEGRAM_BOT_TOKEN:
         logger.error("❌ TELEGRAM_BOT_TOKEN not set!")
         return
 
-    if not UPTIMEROBOT_API_KEY:
-        logger.warning("⚠️ UPTIMEROBOT_API_KEY not set — UptimeRobot won't work")
-    if not CRONJOB_API_KEY or not CRONJOB_API_USER:
-        logger.warning("⚠️ CRONJOB_API_KEY/USER not set — Cron-job won't work")
-
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
     logger.info(f"✅ Flask health server running on port {PORT}")
 
+    # Build bot application
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("monitor", monitor_url))
     app.add_handler(MessageHandler(filters.COMMAND, unknown))
-
-    logger.info("🤖 URL Monitor Bot started! (Cron-job: 1 min interval)")
+    
+    logger.info("🤖 URL Monitor Bot started!")
 
     try:
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook")
-        logger.info("✅ Webhook deleted (polling mode)")
     except:
         pass
 
@@ -362,3 +260,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
